@@ -25,6 +25,13 @@ SERVICE_PATH=/etc/systemd/system
 # Diretorio para armazenar o banco de dados SQLite
 DB_DIR=/var/lib/open-turkey
 
+# Diretorio e arquivo do horario semanal (lido por "schedule apply")
+CONFIG_DIR=/etc/open-turkey
+SCHEDULE_FILE=$(CONFIG_DIR)/schedule.json
+
+# Unidades do horario: timer de minuto em minuto + reaplicar ao acordar
+SCHEDULE_UNITS=open-turkey-schedule.service open-turkey-schedule.timer open-turkey-schedule-resume.service
+
 # Inclui o Go instalado em /usr/local/go/bin no PATH
 export PATH := /usr/local/go/bin:$(PATH)
 
@@ -107,10 +114,27 @@ exec sudo $(INSTALL_PATH)/$(BINARY_INSTALLED) "$$@"\n' > $(INSTALL_PATH)/$(BINAR
 	@echo ">> Criando diretorio do banco de dados em $(DB_DIR)..."
 	mkdir -p $(DB_DIR)
 
+	@echo ">> Criando wrapper $(INSTALL_PATH)/open-turkey-schedule..."
+	printf '#!/bin/bash\n\
+# Wrapper do horario do Open Turkey: open-turkey-schedule apply|status\n\
+exec sudo $(INSTALL_PATH)/$(BINARY_INSTALLED) schedule "$$@"\n' > $(INSTALL_PATH)/open-turkey-schedule
+	chmod 755 $(INSTALL_PATH)/open-turkey-schedule
+
+	@echo ">> Instalando o horario em $(SCHEDULE_FILE) (sem sobrescrever)..."
+	# So copiamos se ainda nao existir, para preservar edicoes do usuario.
+	mkdir -p $(CONFIG_DIR)
+	test -e $(SCHEDULE_FILE) || install -m 644 etc/schedule.json $(SCHEDULE_FILE)
+
+	@echo ">> Instalando as unidades do horario..."
+	for u in $(SCHEDULE_UNITS); do install -m 644 systemd/$$u $(SERVICE_PATH)/$$u; done
+
 	@echo ">> Habilitando e iniciando o servico..."
 	systemctl daemon-reload
 	systemctl enable open-turkey.service
 	systemctl start open-turkey.service
+	# O timer so e habilitado; ele so age quando o bloco do horario existir
+	# (sem o bloco, "schedule apply" falha sem mudar nada).
+	systemctl enable open-turkey-schedule.timer open-turkey-schedule-resume.service
 
 	@echo ">> Instalacao concluida com sucesso!"
 
@@ -120,6 +144,13 @@ exec sudo $(INSTALL_PATH)/$(BINARY_INSTALLED) "$$@"\n' > $(INSTALL_PATH)/$(BINAR
 # -------------------------------------------------------
 .PHONY: uninstall
 uninstall:
+	@echo ">> Parando e removendo o horario..."
+	# Primeiro o timer, para ele nao reativar o bloco no meio da remocao.
+	-systemctl disable --now open-turkey-schedule.timer open-turkey-schedule-resume.service
+	for u in $(SCHEDULE_UNITS); do rm -f $(SERVICE_PATH)/$$u; done
+	rm -f $(INSTALL_PATH)/open-turkey-schedule
+	@grep -q 'BEGIN OPEN-TURKEY' /etc/hosts && echo "AVISO: ainda ha bloqueios aplicados. Antes de desinstalar rode 'open-turkey stop <bloco>' para cada bloco ativo." || true
+
 	@echo ">> Parando o servico..."
 	-systemctl stop open-turkey.service
 
@@ -137,7 +168,7 @@ uninstall:
 	@echo ">> Removendo regra sudoers..."
 	rm -f $(SUDOERS_FILE)
 
-	@echo ">> Desinstalacao concluida com sucesso!"
+	@echo ">> Desinstalacao concluida. Mantidos: $(CONFIG_DIR) (horario) e $(DB_DIR) (banco)."
 
 # -------------------------------------------------------
 # clean: remove artefatos de compilacao

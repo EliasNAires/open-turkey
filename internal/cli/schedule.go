@@ -8,6 +8,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"syscall"
 	"time"
 
 	"github.com/brunodcdo/open-turkey/internal/schedule"
@@ -24,11 +25,18 @@ var scheduleApplyCmd = &cobra.Command{
 	Short: "Ativar/desativar o bloco conforme o horario neste momento",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Imprimimos o erro nos mesmos com prioridade "err" (<3>) e saimos:
+		// o Execute() o imprimiria como info, que o LogLevelMax=notice da
+		// unidade descarta.
 		cfg, err := loadScheduleConfig(cmd)
-		if err != nil {
-			return err
+		if err == nil {
+			err = applySchedule(cfg, time.Now())
 		}
-		return applySchedule(cfg, time.Now())
+		if err != nil {
+			logPrio(3, "horario: erro: %v", err)
+			os.Exit(1)
+		}
+		return nil
 	},
 }
 
@@ -137,12 +145,32 @@ func loadScheduleConfig(cmd *cobra.Command) (*schedule.Config, error) {
 // logNotice imprime uma mensagem. Sob o systemd (JOURNAL_STREAM definido),
 // usa o prefixo "<5>" para gravar com prioridade notice, que passa pelo
 // LogLevelMax=notice da unidade enquanto as mensagens de rotina sao filtradas.
-func logNotice(format string, a ...any) {
+func logNotice(format string, a ...any) { logPrio(5, format, a...) }
+
+// logPrio imprime com a prioridade syslog dada quando o stdout e o journal;
+// no terminal, imprime a mensagem sem prefixo.
+func logPrio(prio int, format string, a ...any) {
 	prefix := ""
-	if os.Getenv("JOURNAL_STREAM") != "" {
-		prefix = "<5>"
+	if stdoutIsJournal() {
+		prefix = fmt.Sprintf("<%d>", prio)
 	}
 	fmt.Printf(prefix+format+"\n", a...)
+}
+
+// stdoutIsJournal segue a recomendacao do systemd: JOURNAL_STREAM ("dev:inode")
+// pode ser herdado por processos filhos (ex: um terminal), entao so vale se
+// bater com o dispositivo/inode do stdout atual.
+func stdoutIsJournal() bool {
+	var dev, ino uint64
+	if _, err := fmt.Sscanf(os.Getenv("JOURNAL_STREAM"), "%d:%d", &dev, &ino); err != nil {
+		return false
+	}
+	fi, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	return ok && uint64(st.Dev) == dev && st.Ino == ino
 }
 
 func estadoTexto(bloqueado bool) string {

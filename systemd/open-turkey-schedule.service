@@ -1,0 +1,16 @@
+# Aplica o horario de /etc/open-turkey/schedule.json: ativa ou desativa o
+# bloco conforme a hora ATUAL. Disparado pelo open-turkey-schedule.timer
+# (a cada minuto e no boot) e pelo open-turkey-schedule-resume.service.
+[Unit]
+Description=Open Turkey - aplicar horario semanal
+Documentation=https://github.com/brunodcdo/open-turkey
+After=open-turkey.service network.target
+Wants=open-turkey.service
+ConditionPathExists=/etc/open-turkey/schedule.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/open-turkey-bin schedule apply
+# Roda a cada minuto: filtramos as mensagens de rotina (inicio/fim do job)
+# e so as mudancas de estado (prioridade notice) chegam ao journal.
+LogLevelMax=notice

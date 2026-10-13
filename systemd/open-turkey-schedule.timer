@@ -1,0 +1,13 @@
+# Recalcula o horario no inicio de cada minuto. Como as janelas comecam e
+# terminam em minutos exatos, as transicoes acontecem na hora certa, e editar
+# o schedule.json vale em ate 1 minuto sem regenerar unidades.
+[Unit]
+Description=Open Turkey - verificar horario a cada minuto
+
+[Timer]
+OnBootSec=15s
+OnCalendar=*-*-* *:*:00
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

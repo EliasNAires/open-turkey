@@ -1,0 +1,14 @@
+# Ao voltar da suspensao/hibernacao, reaplica o horario imediatamente, sem
+# esperar o proximo minuto do timer.
+[Unit]
+Description=Open Turkey - aplicar horario ao voltar da suspensao
+After=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+ConditionPathExists=/etc/open-turkey/schedule.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/open-turkey-bin schedule apply
+LogLevelMax=notice
+
+[Install]
+WantedBy=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
