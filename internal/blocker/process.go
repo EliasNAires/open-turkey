@@ -91,8 +91,6 @@ import (
 //	killed, err := blocker.KillBlocked([]string{"firefox", "chrome"})
 //	fmt.Printf("Processos encerrados: %d\n", killed)
 func KillBlocked(processNames []string) (int, error) {
-	// Se a lista de processos esta vazia, nao temos nada pra fazer.
-	// Retornamos 0 mortos e nenhum erro.
 	// Defesa extra: descartamos nomes invalidos ou criticos mesmo que ja
 	// estejam no banco (gravados antes de existir a validacao no add-app).
 	processNames = filtrarNomesSeguros(processNames)
@@ -105,69 +103,118 @@ func KillBlocked(processNames []string) (int, error) {
 	// - Um nome (ex: "cpuinfo", "meminfo") → e um arquivo do sistema, ignoramos
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
-		// Se nao conseguimos ler /proc, algo esta muito errado.
-		// Pode ser que o sistema nao tenha /proc montado (muito raro no Linux).
 		return 0, err
 	}
 
-	// Pegamos nosso proprio PID pra nao nos matarmos acidentalmente.
-	// os.Getpid() retorna o PID do programa que esta rodando AGORA (o Open Turkey).
-	selfPID := os.Getpid()
-
-	// Contador de quantos processos matamos com sucesso.
-	killed := 0
-
-	// Percorremos cada entrada do /proc procurando por PIDs.
+	// PRIMEIRA PASSADA: montamos a arvore de processos (pid → pai, dono) e
+	// achamos os que batem com a lista. Matar os filhos importa: um jogo
+	// aberto pelo Steam e filho (neto...) do processo "steam", e sem isso ele
+	// continuaria rodando depois do bloqueio.
+	procs := map[int]procNode{}
+	var matched []int
 	for _, entry := range entries {
-		// Tentamos converter o nome da entrada pra numero.
-		// Se funcionar, e um PID. Se nao, e um arquivo do sistema e ignoramos.
-		// Exemplo: "1234" vira o numero 1234, mas "cpuinfo" daria erro.
 		pid, err := strconv.Atoi(entry.Name())
 		if err != nil {
-			// Nao e um numero → nao e um PID → pula pro proximo.
 			continue
 		}
-
-		// SEGURANCA: Nunca matamos o PID 1 (init/systemd).
-		// O PID 1 e o primeiro processo que o kernel inicia. Ele e o "avo"
-		// de todos os outros processos. Mata-lo causaria um kernel panic
-		// ou desligaria o sistema.
-		if pid == 1 {
-			continue
+		node, ok := readProcNode(pid)
+		if !ok {
+			continue // o processo sumiu
 		}
-
-		// SEGURANCA: Nunca matamos nosso proprio processo.
-		// Se nos matassemos, o Open Turkey pararia de funcionar e todos os
-		// bloqueios que dependem de monitoramento continuo falhariam.
-		if pid == selfPID {
-			continue
-		}
-
-		// Verificamos se este processo bate com algum nome da lista de bloqueio.
-		// Usamos duas estrategias de deteccao (explicadas abaixo).
+		procs[pid] = node
 		if matchesBlockedProcess(pid, processNames) {
-			// Encontramos um processo bloqueado! Enviamos SIGKILL (sinal 9).
-			//
-			// syscall.Kill() pede ao kernel pra enviar um sinal a um processo.
-			// SIGKILL e o sinal mais agressivo — mata o processo instantaneamente
-			// e ele NAO pode interceptar ou ignorar esse sinal.
-			err := syscall.Kill(pid, syscall.SIGKILL)
-			if err != nil {
-				// Se deu erro ao matar, o processo provavelmente ja morreu sozinho
-				// entre a hora que lemos /proc e a hora que tentamos mata-lo.
-				// Isso e uma "race condition" — situacao normal em sistemas com
-				// muitos processos. Simplesmente ignoramos e continuamos.
-				continue
-			}
-			// Processo morto com sucesso! Incrementamos o contador.
-			killed++
+			matched = append(matched, pid)
 		}
 	}
 
-	// Retornamos quantos processos matamos. Nao retornamos erro aqui porque
-	// erros individuais de processos que desapareceram sao normais e ja foram
-	// tratados acima.
+	// SEGUNDA PASSADA: matamos os processos bloqueados e seus descendentes.
+	selfPID := os.Getpid()
+	killed := 0
+	for _, pid := range withDescendants(matched, procs) {
+		// SEGURANCA: nunca o PID 1 (init/systemd) nem nos mesmos.
+		if pid == 1 || pid == selfPID {
+			continue
+		}
+		// SIGKILL: o processo nao pode capturar nem ignorar. Erros sao
+		// normais (o processo morreu entre a leitura e o kill).
+		if err := syscall.Kill(pid, syscall.SIGKILL); err == nil {
+			killed++
+		}
+	}
 	return killed, nil
+}
+
+// procNode e o minimo da arvore de processos que precisamos.
+type procNode struct {
+	PPID int
+	UID  uint32
+}
+
+// readProcNode le o pai (de /proc/[pid]/stat) e o dono de um processo.
+func readProcNode(pid int) (procNode, bool) {
+	path := "/proc/" + strconv.Itoa(pid)
+	data, err := os.ReadFile(path + "/stat")
+	if err != nil {
+		return procNode{}, false
+	}
+	ppid, ok := parseStatPPID(string(data))
+	if !ok {
+		return procNode{}, false
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return procNode{}, false
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return procNode{}, false
+	}
+	return procNode{PPID: ppid, UID: st.Uid}, true
+}
+
+// parseStatPPID extrai o PPID de /proc/[pid]/stat: "pid (comm) estado ppid ...".
+// O comm pode conter espacos e parenteses, entao cortamos no ULTIMO ')'.
+func parseStatPPID(stat string) (int, bool) {
+	i := strings.LastIndexByte(stat, ')')
+	if i < 0 {
+		return 0, false
+	}
+	fields := strings.Fields(stat[i+1:])
+	if len(fields) < 2 {
+		return 0, false
+	}
+	ppid, err := strconv.Atoi(fields[1])
+	return ppid, err == nil
+}
+
+// withDescendants devolve os pids de roots mais todos os seus descendentes.
+// SEGURANCA: um descendente so entra se tiver o MESMO dono que o processo
+// bloqueado de onde veio — nunca matamos um processo de root (ex: um helper
+// via pkexec) so porque foi aberto por um app bloqueado do usuario.
+func withDescendants(roots []int, procs map[int]procNode) []int {
+	children := map[int][]int{}
+	for pid, n := range procs {
+		children[n.PPID] = append(children[n.PPID], pid)
+	}
+	seen := map[int]bool{}
+	var out []int
+	var visit func(pid int, uid uint32)
+	visit = func(pid int, uid uint32) {
+		if seen[pid] {
+			return
+		}
+		seen[pid] = true
+		out = append(out, pid)
+		for _, c := range children[pid] {
+			if procs[c].UID == uid {
+				visit(c, uid)
+			}
+		}
+	}
+	for _, r := range roots {
+		visit(r, procs[r].UID)
+	}
+	return out
 }
 
 // matchesBlockedProcess le as informacoes de identidade de um processo em

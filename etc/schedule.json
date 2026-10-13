@@ -1,5 +1,5 @@
 {
-  "_comment": "Janelas em que o bloco fica DESBLOQUEADO (HH:MM-HH:MM, fim exclusivo, 24:00 = fim do dia). Fora delas: bloqueado. Dia ausente = bloqueado o dia todo. Aplicado em ate 1 minuto apos salvar; teste com: open-turkey-schedule status. grace_minutes: se o bloqueio comeca com um jogo aberto (processo de game_processes), espera ate N minutos (uma vez por franja) e avisa por notificacao do Omarchy.",
+  "_comment": "Janelas em que o bloco fica DESBLOQUEADO (HH:MM-HH:MM, fim exclusivo, 24:00 = fim do dia). Fora delas: bloqueado. Dia ausente = bloqueado o dia todo. Aplicado em ate 1 minuto apos salvar; teste com: open-turkey-schedule status. grace_minutes: se o bloqueio comeca com um jogo aberto (processo de game_processes), espera ate N minutos (uma vez por franja), avisa por notificacao do Omarchy e depois fecha o Steam e o jogo.",
   "block": "steam",
   "timezone": "America/Argentina/Buenos_Aires",
   "grace_minutes": 15,

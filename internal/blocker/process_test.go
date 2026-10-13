@@ -1,9 +1,12 @@
 package blocker
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestProcessMatches(t *testing.T) {
@@ -117,4 +120,87 @@ func TestFindProcessesReal(t *testing.T) {
 		}
 	}
 	t.Fatalf("sleep (pid %d) nao encontrado em %v", cmd.Process.Pid, found)
+}
+
+func TestParseStatPPID(t *testing.T) {
+	casos := map[string]int{
+		"1234 (steam) S 1000 1234 1234 0 -1":   1000,
+		"77 (Web Content (x)) S 42 77 77 0 -1": 42,
+		"9 (a) b) R 5 9 9 0":                   5,
+	}
+	for stat, quer := range casos {
+		if got, ok := parseStatPPID(stat); !ok || got != quer {
+			t.Errorf("parseStatPPID(%q) = %d,%v; queria %d", stat, got, ok, quer)
+		}
+	}
+	if _, ok := parseStatPPID("lixo"); ok {
+		t.Error("stat invalido deveria falhar")
+	}
+}
+
+func TestWithDescendants(t *testing.T) {
+	// steam(10, uid 1000) → reaper(11) → jogo(12) → wine(13)
+	//                     → pkexec helper(14, uid 0) → filho(15, uid 0)
+	// outro processo(20) nao relacionado
+	procs := map[int]procNode{
+		1:  {PPID: 0, UID: 0},
+		10: {PPID: 1, UID: 1000},
+		11: {PPID: 10, UID: 1000},
+		12: {PPID: 11, UID: 1000},
+		13: {PPID: 12, UID: 1000},
+		14: {PPID: 10, UID: 0},
+		15: {PPID: 14, UID: 0},
+		20: {PPID: 1, UID: 1000},
+	}
+	got := map[int]bool{}
+	for _, p := range withDescendants([]int{10}, procs) {
+		got[p] = true
+	}
+	for _, p := range []int{10, 11, 12, 13} {
+		if !got[p] {
+			t.Errorf("pid %d deveria ser morto", p)
+		}
+	}
+	for _, p := range []int{1, 14, 15, 20} {
+		if got[p] {
+			t.Errorf("pid %d NAO deveria ser morto", p)
+		}
+	}
+}
+
+// Teste real: matar um "pai" bloqueado tem que levar junto o filho.
+func TestKillBlockedMataDescendentesReal(t *testing.T) {
+	dir := t.TempDir()
+	// Um shell renomeado "otpaiteste" que fica esperando um sleep filho.
+	bin := dir + "/otpaiteste"
+	data, err := os.ReadFile("/bin/sh")
+	if err != nil {
+		t.Skip(err)
+	}
+	if err := os.WriteFile(bin, data, 0755); err != nil {
+		t.Skip(err)
+	}
+	pai := exec.Command(bin, "-c", "sleep 30 & echo $!; wait")
+	out, err := pai.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pai.Start(); err != nil {
+		t.Skip(err)
+	}
+	defer func() { _ = pai.Process.Kill(); _ = pai.Wait() }()
+	var filho int
+	if _, err := fmt.Fscan(out, &filho); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := KillBlocked([]string{"otpaiteste"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = pai.Wait()
+	// O filho vira zumbi ou some; em ambos os casos nao esta mais rodando.
+	time.Sleep(100 * time.Millisecond)
+	if st, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", filho)); err == nil && !strings.Contains(string(st), ") Z ") {
+		t.Errorf("filho %d (sleep) deveria ter morrido junto com o pai: %s", filho, st)
+	}
 }

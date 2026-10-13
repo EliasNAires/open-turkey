@@ -60,13 +60,13 @@ func (c *Config) Decide(now time.Time, active, locked, gameRunning bool, st Stat
 			mins := int((remaining + time.Minute - 1) / time.Minute) // arredonda para cima
 			return Decision{State: st, Notice: &Notice{
 				Headline: fmt.Sprintf("%s will be blocked in %d min", displayName(c.Block), mins),
-				Body:     "Blocked hours have started. Save and quit your game: it will be blocked when you close it or when time runs out.",
+				Body:     "Blocked hours have started. Save now: when time runs out, Steam and your game will be closed.",
 				Urgency:  "critical",
 			}}
 		}
 		return Decision{Activate: true, State: State{GraceFor: period, NotifyID: st.NotifyID}, Notice: &Notice{
 			Headline: fmt.Sprintf("%s blocked", displayName(c.Block)),
-			Body:     "Grace period is over.",
+			Body:     "Grace period is over: Steam and running games were closed.",
 			Urgency:  "normal",
 		}}
 	}
