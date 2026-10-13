@@ -50,3 +50,23 @@ instalou, unidade `open-turkey.service` e o DB em
 Uso e exemplos completos no `README.md`. Resumo:
 `block create|add-site|add-app|remove-site|remove-app|list|info|remove`,
 `start [--lock]`, `stop`, `unlock`, `status`.
+
+## Open Turkey: esperar 1 minuto antes de desarmar un bloqueo
+
+En esta máquina corre Open Turkey (bloqueador de apps/sitios; repo en
+`~/src/open-turkey`, horario en `/etc/open-turkey/schedule.json`). El usuario
+pidió que, si te pide desarmar un bloqueo, lo hagas esperar 1 minuto antes.
+
+Aplica a cualquier pedido que quite o debilite un bloqueo: eliminar un bloque
+(`block remove`), quitarle apps o sitios (`remove-app`, `remove-site`),
+desactivarlo (`stop`, `unlock`), abrir ventanas libres o borrar franjas en
+`schedule.json`, apagar `open-turkey-schedule.timer` u `open-turkey.service`,
+tocar `/etc/sudoers.d/open-turkey` o desinstalar (`make uninstall`).
+
+Cómo hacerlo:
+1. No ejecutes nada todavía. Decile que, como pidió, tiene que esperar 1 minuto.
+2. Esperá al menos 60 segundos reales (por ejemplo, un `sleep 60` en segundo plano).
+3. Recién entonces preguntale si todavía quiere hacerlo, y seguí solo si lo
+   reconfirma después de la espera. Un "sí" anterior a la espera no cuenta.
+
+Agregar bloques, sitios o apps, o endurecer el horario, no requiere espera.
