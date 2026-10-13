@@ -93,6 +93,9 @@ import (
 func KillBlocked(processNames []string) (int, error) {
 	// Se a lista de processos esta vazia, nao temos nada pra fazer.
 	// Retornamos 0 mortos e nenhum erro.
+	// Defesa extra: descartamos nomes invalidos ou criticos mesmo que ja
+	// estejam no banco (gravados antes de existir a validacao no add-app).
+	processNames = filtrarNomesSeguros(processNames)
 	if len(processNames) == 0 {
 		return 0, nil
 	}
@@ -239,4 +242,15 @@ func baseName(path string) string {
 		return path[i+1:]
 	}
 	return path
+}
+
+// filtrarNomesSeguros devolve so os nomes aceitos por ValidarNomeProcesso.
+func filtrarNomesSeguros(processNames []string) []string {
+	var seguros []string
+	for _, n := range processNames {
+		if ValidarNomeProcesso(n) == nil {
+			seguros = append(seguros, n)
+		}
+	}
+	return seguros
 }

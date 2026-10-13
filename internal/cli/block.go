@@ -243,6 +243,15 @@ var blockAddAppCmd = &cobra.Command{
 		// Os nomes dos processos que serão bloqueados (ex: "discord", "telegram").
 		processNames := args[1:]
 
+		// Validamos antes de tocar o banco: o daemon mata esses processos
+		// com SIGKILL como root, entao um nome errado pode derrubar o sistema.
+		for _, p := range processNames {
+			if err := blocker.ValidarNomeProcesso(p); err != nil {
+				fmt.Fprintf(os.Stderr, "Erro: %v\n", err)
+				os.Exit(1)
+			}
+		}
+
 		database, err := openDB()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Erro: %v\n", err)
