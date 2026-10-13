@@ -23,25 +23,25 @@
 //
 // Dois arquivos nos interessam:
 //
-//   /proc/[PID]/comm    → O nome curto do processo (maximo 15 caracteres).
-//                         Exemplo: "firefox", "chrome", "slack"
+//	/proc/[PID]/comm    → O nome curto do processo (maximo 15 caracteres).
+//	                      Exemplo: "firefox", "chrome", "slack"
 //
-//   /proc/[PID]/cmdline → A linha de comando completa usada pra iniciar o
-//                         processo. Exemplo: "/usr/bin/firefox --new-window".
-//                         Os argumentos sao separados por bytes nulos (\0),
-//                         nao por espacos — isso e uma particularidade do Linux.
+//	/proc/[PID]/cmdline → A linha de comando completa usada pra iniciar o
+//	                      processo. Exemplo: "/usr/bin/firefox --new-window".
+//	                      Os argumentos sao separados por bytes nulos (\0),
+//	                      nao por espacos — isso e uma particularidade do Linux.
 //
 // COMO "MATAMOS" UM PROCESSO?
 // ----------------------------
 // No Linux, processos se comunicam atraves de "sinais" (signals). Sao como
 // mensagens especiais que o kernel entrega. Existem varios tipos:
 //
-//   SIGTERM (sinal 15) → "Por favor, encerre educadamente." O processo pode
-//                         capturar esse sinal, salvar dados e sair com calma.
+//	SIGTERM (sinal 15) → "Por favor, encerre educadamente." O processo pode
+//	                      capturar esse sinal, salvar dados e sair com calma.
 //
-//   SIGKILL (sinal 9)  → "Morra AGORA." O processo NAO pode capturar, ignorar
-//                         ou bloquear esse sinal. O kernel mata ele na hora,
-//                         sem chance de fazer nada. E o "botao de emergencia".
+//	SIGKILL (sinal 9)  → "Morra AGORA." O processo NAO pode capturar, ignorar
+//	                      ou bloquear esse sinal. O kernel mata ele na hora,
+//	                      sem chance de fazer nada. E o "botao de emergencia".
 //
 // Nos usamos SIGKILL porque estamos lidando com programas que o usuario quer
 // BLOQUEADOS. Nao faz sentido pedir educadamente pro Firefox fechar — o
@@ -56,13 +56,14 @@
 //
 // CUIDADOS DE SEGURANCA:
 // ----------------------
-// - Nunca matamos o PID 1 (init/systemd) — ele e o "pai" de todos os
-//   processos. Mata-lo derrubaria o sistema inteiro.
-// - Nunca matamos nosso proprio processo — seria suicidio, o bloqueio pararia.
-// - Processos podem desaparecer a qualquer momento (o usuario fechou, ou o
-//   processo terminou sozinho). Isso causa "race conditions" — tentamos ler
-//   a ficha de um processo que ja nao existe mais. Simplesmente ignoramos
-//   esses erros e seguimos em frente.
+//   - Nunca matamos o PID 1 (init/systemd) — ele e o "pai" de todos os
+//     processos. Mata-lo derrubaria o sistema inteiro.
+//   - Nunca matamos nosso proprio processo — seria suicidio, o bloqueio pararia.
+//   - Processos podem desaparecer a qualquer momento (o usuario fechou, ou o
+//     processo terminou sozinho). Isso causa "race conditions" — tentamos ler
+//     a ficha de um processo que ja nao existe mais. Simplesmente ignoramos
+//     esses erros e seguimos em frente.
+//
 // =============================================================================
 package blocker
 
@@ -83,7 +84,7 @@ import (
 // Retorno:
 //   - int:   quantidade de processos que foram efetivamente mortos.
 //   - error: erro caso nao consiga ler o diretorio /proc (se isso falhar,
-//            algo esta muito errado no sistema).
+//     algo esta muito errado no sistema).
 //
 // Exemplo de uso:
 //
@@ -166,90 +167,76 @@ func KillBlocked(processNames []string) (int, error) {
 	return killed, nil
 }
 
-// matchesBlockedProcess verifica se um processo (identificado pelo PID) tem
-// um nome que bate com algum dos nomes na lista de bloqueio.
+// matchesBlockedProcess le as informacoes de identidade de um processo em
+// /proc/[pid]/ e decide, via processMatches, se ele esta na lista de bloqueio.
 //
-// Usamos DUAS estrategias de deteccao pra maximizar a chance de pegar o
-// processo certo:
+// Usamos tres fontes, sempre com comparacao EXATA (nunca substring):
 //
-//  1. /proc/[pid]/comm — Nome curto do processo (rapido e simples).
-//     Funciona bem pra programas com nomes curtos como "firefox" ou "chrome".
-//     Limitacao: maximo de 15 caracteres. "firefox-esr" aparece como "firefox-esr",
-//     mas nomes muito longos seriam cortados.
+//  1. /proc/[pid]/comm — nome curto do processo (ate 15 caracteres).
+//  2. /proc/[pid]/exe  — link simbolico para o executavel real; usamos so
+//     o basename (ex: "/opt/steam/steamwebhelper" → "steamwebhelper").
+//  3. argv[0] de /proc/[pid]/cmdline — so o basename do PRIMEIRO argumento.
 //
-//  2. /proc/[pid]/cmdline — Linha de comando completa (mais detalhada).
-//     Contem o caminho completo e todos os argumentos. Util quando o nome no
-//     comm nao bate, mas o executavel completo sim.
-//     Exemplo: comm pode ser "python3", mas cmdline revela
-//     "/usr/bin/python3 /opt/slack/slack".
+// Por que nao olhamos os outros argumentos? Porque o daemon roda como root e
+// mata com SIGKILL: comparar por substring em todo o cmdline faria
+// "vim notas-steam.txt" ser morto ao bloquear "steam".
 func matchesBlockedProcess(pid int, processNames []string) bool {
-	// Montamos o caminho base pra esse PID: "/proc/1234"
 	pidPath := "/proc/" + strconv.Itoa(pid)
 
-	// --- ESTRATEGIA 1: Checar /proc/[pid]/comm ---
-	//
-	// O arquivo comm contem apenas o nome do executavel, sem caminho e sem
-	// argumentos. E o jeito mais rapido de identificar um processo.
-	// Exemplo de conteudo: "firefox\n" (vem com uma quebra de linha no final)
-	commBytes, err := os.ReadFile(pidPath + "/comm")
-	if err == nil {
-		// strings.TrimSpace remove espacos e quebras de linha do inicio e fim.
-		// "firefox\n" vira "firefox".
-		comm := strings.TrimSpace(string(commBytes))
-
-		// Comparamos com cada nome da lista usando EqualFold, que ignora
-		// maiusculas/minusculas. Assim "Firefox", "FIREFOX" e "firefox"
-		// sao todos reconhecidos.
-		for _, name := range processNames {
-			if strings.EqualFold(comm, name) {
-				return true
-			}
-		}
+	// Erros de leitura sao normais (processo sumiu, ou /proc/[pid]/exe de
+	// threads do kernel) — o campo correspondente so fica vazio.
+	var comm, exe, argv0 string
+	if b, err := os.ReadFile(pidPath + "/comm"); err == nil {
+		comm = strings.TrimSpace(string(b))
 	}
-	// Se deu erro ao ler comm, o processo pode ter desaparecido.
-	// Nao e problema — tentamos a proxima estrategia.
-
-	// --- ESTRATEGIA 2: Checar /proc/[pid]/cmdline ---
-	//
-	// O arquivo cmdline contem a linha de comando completa usada pra iniciar
-	// o processo. Os argumentos sao separados por bytes nulos (\0), nao por
-	// espacos. Isso e uma convencao do kernel Linux.
-	//
-	// Exemplo (representando \0 como |):
-	//   /usr/bin/firefox|--new-window|https://google.com
-	//
-	// Cada pedaco entre os \0 e um "argumento" do comando.
-	cmdlineBytes, err := os.ReadFile(pidPath + "/cmdline")
-	if err != nil {
-		// Se nao conseguimos ler o cmdline, o processo desapareceu.
-		// Nao podemos confirmar nem negar — retornamos false (nao e match).
-		return false
+	if target, err := os.Readlink(pidPath + "/exe"); err == nil {
+		exe = target
+	}
+	if b, err := os.ReadFile(pidPath + "/cmdline"); err == nil {
+		argv0 = argv0FromCmdline(b)
 	}
 
-	// Convertemos os bytes pra string e separamos pelos bytes nulos (\0).
-	// Resultado: ["usr/bin/firefox", "--new-window", "https://google.com"]
-	cmdline := string(cmdlineBytes)
-	args := strings.Split(cmdline, "\x00")
+	return processMatches(comm, exe, argv0, processNames)
+}
 
-	// Verificamos cada argumento da linha de comando contra cada nome da lista.
-	// Usamos Contains (contem) ao inves de EqualFold (igual) porque o caminho
-	// completo pode ser "/usr/bin/firefox" e queremos encontrar "firefox" dentro dele.
-	//
-	// Convertemos tudo pra minusculo pra a comparacao ser case-insensitive.
-	for _, arg := range args {
-		// Argumentos vazios podem aparecer (especialmente o ultimo, apos o \0 final).
-		// Pulamos eles pra evitar falsos positivos.
-		if arg == "" {
+// processMatches e a regra de decisao pura (sem acesso ao /proc), para poder
+// ser testada. Um processo bate se algum nome da lista for EXATAMENTE igual a:
+// comm, basename(exe) ou basename(argv0). Nomes vazios nunca batem.
+func processMatches(comm, exe, argv0 string, processNames []string) bool {
+	// Quando o executavel e substituido em disco (ex: o Steam se atualizando),
+	// o kernel mostra o link como "/caminho/steam (deleted)".
+	exe = strings.TrimSuffix(exe, " (deleted)")
+
+	candidates := []string{comm, baseName(exe), baseName(argv0)}
+	for _, name := range processNames {
+		if name == "" {
 			continue
 		}
-		argLower := strings.ToLower(arg)
-		for _, name := range processNames {
-			if strings.Contains(argLower, strings.ToLower(name)) {
+		for _, c := range candidates {
+			if c == name {
 				return true
 			}
 		}
 	}
-
-	// Nenhuma estrategia encontrou match — esse processo nao esta na lista.
 	return false
+}
+
+// argv0FromCmdline extrai so o primeiro argumento do conteudo de
+// /proc/[pid]/cmdline, cujos argumentos sao separados por bytes nulos (\0).
+func argv0FromCmdline(cmdline []byte) string {
+	argv0, _, _ := strings.Cut(string(cmdline), "\x00")
+	return argv0
+}
+
+// baseName devolve o ultimo componente de um caminho ("/usr/bin/steam" →
+// "steam"). Diferente de filepath.Base, devolve "" para entrada vazia em vez
+// de ".", para que um campo ausente nunca bata com nada.
+func baseName(path string) string {
+	if path == "" {
+		return ""
+	}
+	if i := strings.LastIndexByte(path, '/'); i >= 0 {
+		return path[i+1:]
+	}
+	return path
 }

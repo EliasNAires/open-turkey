@@ -1,0 +1,97 @@
+package blocker
+
+import (
+	"os/exec"
+	"testing"
+)
+
+func TestProcessMatches(t *testing.T) {
+	blocked := []string{"steam", "steamwebhelper"}
+
+	casos := []struct {
+		nome  string
+		comm  string
+		exe   string
+		argv0 string
+		quer  bool
+	}{
+		// Deve bater
+		{"comm exato", "steam", "/home/u/.local/share/Steam/ubuntu12_32/steam", "/home/u/.local/share/Steam/ubuntu12_32/steam", true},
+		{"script /usr/bin/steam (comm do script, exe do bash)", "steam", "/usr/bin/bash", "/bin/bash", true},
+		{"so basename do exe", "outro", "/opt/steam/steamwebhelper", "", true},
+		{"so basename do argv0", "x", "", "/opt/steam/steamwebhelper", true},
+		{"argv0 sem caminho", "", "", "steam", true},
+		{"exe substituido em disco", "", "/opt/steam/steam (deleted)", "", true},
+
+		// NAO deve bater
+		{"vim com arquivo com steam no nome", "vim", "/usr/bin/vim", "vim", false},
+		{"substring no comm", "steam.sh", "/usr/bin/bash", "/bin/bash", false},
+		{"substring no exe", "steamos-tool", "/usr/bin/steamos-tool", "/usr/bin/steamos-tool", false},
+		{"Proton steam.exe", "steam.exe", "/home/u/proton/bin/wine64-preloader", "C:\\windows\\system32\\steam.exe", false},
+		{"diretorio com steam no caminho", "game", "/home/u/.local/share/Steam/steamapps/common/Game/game", "./game", false},
+		{"maiusculas diferentes", "Steam", "", "", false},
+		{"tudo vazio", "", "", "", false},
+	}
+
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			if got := processMatches(c.comm, c.exe, c.argv0, blocked); got != c.quer {
+				t.Errorf("processMatches(%q, %q, %q) = %v, quer %v", c.comm, c.exe, c.argv0, got, c.quer)
+			}
+		})
+	}
+}
+
+// O caso pedido explicitamente: "vim notas-steam.txt" tem "steam" no cmdline,
+// mas so argv[0] e considerado — e argv[0] e "vim".
+func TestProcessMatchesIgnoraArgumentos(t *testing.T) {
+	argv0 := argv0FromCmdline([]byte("vim\x00notas-steam.txt\x00"))
+	if argv0 != "vim" {
+		t.Fatalf("argv0 = %q, quer \"vim\"", argv0)
+	}
+	if processMatches("vim", "/usr/bin/vim", argv0, []string{"steam"}) {
+		t.Fatal("'vim notas-steam.txt' nao deveria bater com 'steam'")
+	}
+}
+
+func TestProcessMatchesNomeVazioNaLista(t *testing.T) {
+	if processMatches("", "", "", []string{""}) {
+		t.Fatal("nome vazio na lista nunca deve bater")
+	}
+}
+
+func TestBaseName(t *testing.T) {
+	for in, quer := range map[string]string{
+		"":                 "",
+		"steam":            "steam",
+		"/usr/bin/steam":   "steam",
+		"/usr/bin/":        "",
+		"./steamwebhelper": "steamwebhelper",
+	} {
+		if got := baseName(in); got != quer {
+			t.Errorf("baseName(%q) = %q, quer %q", in, got, quer)
+		}
+	}
+}
+
+// Teste contra um processo real em /proc: um shell cujo argumento contem
+// "steam" nao pode bater com "steam", mas bate pelo proprio nome.
+func TestMatchesBlockedProcessReal(t *testing.T) {
+	// O "; :" impede o shell de fazer exec direto no sleep.
+	cmd := exec.Command("sh", "-c", "sleep 30; :", "notas-steam.txt")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("nao consegui iniciar sh: %v", err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	pid := cmd.Process.Pid
+
+	if matchesBlockedProcess(pid, []string{"steam"}) {
+		t.Error("processo com 'notas-steam.txt' nos argumentos nao deveria bater com 'steam'")
+	}
+	if matchesBlockedProcess(pid, []string{"notas-steam.txt"}) {
+		t.Error("argumentos alem de argv[0] nunca devem ser considerados")
+	}
+	if !matchesBlockedProcess(pid, []string{"sh"}) {
+		t.Error("o proprio shell deveria bater com 'sh' (comm/argv0)")
+	}
+}
