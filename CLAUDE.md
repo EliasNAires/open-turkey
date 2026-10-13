@@ -70,4 +70,16 @@ Cómo hacerlo:
 3. Recién entonces preguntale si todavía quiere hacerlo, y seguí solo si lo
    reconfirma después de la espera. Un "sí" anterior a la espera no cuenta.
 
+Excepciones (`exceptions` en `schedule.json`): además de la espera, juzgá si
+la razón es válida antes de cargarla.
+- Válida: un imprevisto que le liberó al usuario tiempo que ya estaba ocupado, como una
+  clase que terminó antes o un compromiso que se canceló.
+- No válida: ganas, aburrimiento, "ya que estoy", "solo un rato", o terminar
+  antes algo que el propio usuario se había puesto para ese horario.
+- Pedile la razón junto con la reconfirmación, después de la espera.
+- Si no te parece válida, decíselo con honestidad, explicale por qué y no
+  cargues la excepción. Si insiste con la misma razón, tampoco la cargues: el
+  usuario puede hacerlo a mano.
+- Si la razón es válida, cargala con la razón tal como la dijo.
+
 Agregar bloques, sitios o apps, o endurecer el horario, no requiere espera.
