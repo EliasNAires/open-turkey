@@ -254,3 +254,37 @@ func filtrarNomesSeguros(processNames []string) []string {
 	}
 	return seguros
 }
+
+// ProcessInfo identifica um processo encontrado por FindProcesses.
+type ProcessInfo struct {
+	PID int
+	UID uint32
+}
+
+// FindProcesses lista os processos cujo nome bate EXATAMENTE (mesma regra de
+// KillBlocked) com algum de processNames, sem mata-los. O UID e o dono do
+// processo (dono do diretorio /proc/[pid]).
+func FindProcesses(processNames []string) ([]ProcessInfo, error) {
+	if len(processNames) == 0 {
+		return nil, nil
+	}
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil, err
+	}
+	var found []ProcessInfo
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || !matchesBlockedProcess(pid, processNames) {
+			continue
+		}
+		fi, err := os.Stat("/proc/" + entry.Name())
+		if err != nil {
+			continue // o processo sumiu
+		}
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+			found = append(found, ProcessInfo{PID: pid, UID: st.Uid})
+		}
+	}
+	return found, nil
+}

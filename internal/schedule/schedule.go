@@ -51,14 +51,21 @@ type Config struct {
 	Location *time.Location
 	// Unblocked[time.Weekday] lista as janelas de desbloqueio daquele dia.
 	Unblocked [7][]Window
+	// Grace e o tempo maximo de espera, quando o bloqueio comeca com um jogo
+	// aberto, antes de ativar o bloco mesmo assim. Zero desativa a carencia.
+	Grace time.Duration
+	// GameProcesses sao os nomes (exatos) que indicam um jogo rodando.
+	GameProcesses []string
 }
 
 // fileConfig e o formato do arquivo JSON.
 type fileConfig struct {
-	Comment   string              `json:"_comment,omitempty"`
-	Block     string              `json:"block"`
-	Timezone  string              `json:"timezone"`
-	Unblocked map[string][]string `json:"unblocked"`
+	Comment       string              `json:"_comment,omitempty"`
+	Block         string              `json:"block"`
+	Timezone      string              `json:"timezone"`
+	Unblocked     map[string][]string `json:"unblocked"`
+	GraceMinutes  int                 `json:"grace_minutes,omitempty"`
+	GameProcesses []string            `json:"game_processes,omitempty"`
 }
 
 var weekdays = map[string]time.Weekday{
@@ -100,7 +107,24 @@ func Parse(data []byte) (*Config, error) {
 		return nil, fmt.Errorf("timezone '%s' invalido: %w", fc.Timezone, err)
 	}
 
-	cfg := &Config{Block: fc.Block, Location: loc}
+	if fc.GraceMinutes < 0 || fc.GraceMinutes > 180 {
+		return nil, fmt.Errorf("grace_minutes deve estar entre 0 e 180")
+	}
+	if fc.GraceMinutes > 0 && len(fc.GameProcesses) == 0 {
+		return nil, fmt.Errorf("grace_minutes exige game_processes (ex: [\"reaper\"])")
+	}
+	for _, p := range fc.GameProcesses {
+		if strings.TrimSpace(p) == "" || strings.ContainsAny(p, " /") {
+			return nil, fmt.Errorf("game_processes: nome '%s' invalido", p)
+		}
+	}
+
+	cfg := &Config{
+		Block:         fc.Block,
+		Location:      loc,
+		Grace:         time.Duration(fc.GraceMinutes) * time.Minute,
+		GameProcesses: fc.GameProcesses,
+	}
 	for day, windows := range fc.Unblocked {
 		wd, ok := weekdays[strings.ToLower(day)]
 		if !ok {
@@ -181,4 +205,21 @@ func (c *Config) NextChange(t time.Time) (next time.Time, ok bool) {
 		}
 	}
 	return time.Time{}, false
+}
+
+// PeriodStart devolve o inicio (alinhado ao minuto) do trecho continuo de
+// mesmo estado que contem t, procurando ate 8 dias para tras. Serve para
+// identificar "esta franja bloqueada" de forma estavel entre execucoes.
+// Se o estado nunca muda, devolve o instante zero.
+func (c *Config) PeriodStart(t time.Time) time.Time {
+	current := c.ShouldBlock(t)
+	m := t.Truncate(time.Minute)
+	for i := 0; i < 8*minutesPerDay; i++ {
+		prev := m.Add(-time.Minute)
+		if c.ShouldBlock(prev) != current {
+			return m
+		}
+		m = prev
+	}
+	return time.Time{}
 }

@@ -6,11 +6,15 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/brunodcdo/open-turkey/internal/blocker"
+	"github.com/brunodcdo/open-turkey/internal/notify"
 	"github.com/brunodcdo/open-turkey/internal/schedule"
 	"github.com/spf13/cobra"
 )
@@ -85,7 +89,13 @@ var scheduleStatusCmd = &cobra.Command{
 	},
 }
 
+// scheduleStatePath guarda o State da carencia entre execucoes de apply.
+const scheduleStatePath = "/var/lib/open-turkey/schedule-state.json"
+
 // applySchedule leva o bloco ao estado que o horario exige no instante agora.
+// A politica (incluindo a carencia para jogos abertos) esta em
+// schedule.Config.Decide; aqui so ficam os efeitos: banco, camadas,
+// notificacoes e o arquivo de estado.
 func applySchedule(cfg *schedule.Config, agora time.Time) error {
 	database, err := openDB()
 	if err != nil {
@@ -97,15 +107,26 @@ func applySchedule(cfg *schedule.Config, agora time.Time) error {
 	if err != nil {
 		return err
 	}
-	deveBloquear := cfg.ShouldBlock(agora)
+
+	// So procuramos jogos quando a carencia pode importar.
+	var jogos []blocker.ProcessInfo
+	if cfg.Grace > 0 && cfg.ShouldBlock(agora) && !detalhe.Active {
+		jogos, err = blocker.FindProcesses(cfg.GameProcesses)
+		if err != nil {
+			logPrio(4, "horario: erro ao procurar jogos: %v", err)
+		}
+	}
+
+	st := loadScheduleState()
+	d := cfg.Decide(agora, detalhe.Active, detalhe.Locked, len(jogos) > 0, st)
+
+	if d.Notice != nil {
+		d.State.NotifyID = notifyOwners(jogos, d.State.NotifyID, d.Notice)
+		logNotice("horario: %s — %s", d.Notice.Headline, d.Notice.Body)
+	}
 
 	switch {
-	case deveBloquear == detalhe.Active:
-		// Ja esta certo. Nao imprimimos nada para nao poluir o journal
-		// (este comando roda a cada minuto).
-		return nil
-
-	case deveBloquear:
+	case d.Activate:
 		if len(detalhe.Sites) == 0 && len(detalhe.Apps) == 0 {
 			return fmt.Errorf("bloco '%s' nao tem sites nem apps", cfg.Block)
 		}
@@ -118,14 +139,7 @@ func applySchedule(cfg *schedule.Config, agora time.Time) error {
 			return err
 		}
 		logNotice("horario: bloco '%s' ATIVADO", cfg.Block)
-
-	default:
-		// Um bloco travado manualmente com --lock fica como esta: so o
-		// desafio de "unlock" pode desativa-lo.
-		if detalhe.Locked {
-			logNotice("horario: bloco '%s' esta travado (--lock); nao desativado", cfg.Block)
-			return nil
-		}
+	case d.Deactivate:
 		if err := database.DeactivateBlock(cfg.Block); err != nil {
 			return err
 		}
@@ -134,7 +148,87 @@ func applySchedule(cfg *schedule.Config, agora time.Time) error {
 		}
 		logNotice("horario: bloco '%s' DESATIVADO", cfg.Block)
 	}
+	// Um bloco travado manualmente com --lock nunca e desativado aqui (Decide
+	// nao pede): so o desafio de "unlock" pode desativa-lo.
+
+	if d.State != st {
+		saveScheduleState(d.State)
+	}
 	return nil
+}
+
+// notifyOwners mostra a notificacao para os donos dos processos de jogo
+// (normalmente um so usuario). Erros nao impedem o bloqueio: so vao ao log.
+// Devolve o id da notificacao, para a proxima atualizacao ser no lugar.
+func notifyOwners(jogos []blocker.ProcessInfo, replaceID uint32, n *schedule.Notice) uint32 {
+	vistos := map[uint32]bool{}
+	id := replaceID
+	for _, j := range jogos {
+		if vistos[j.UID] || j.UID == 0 {
+			continue
+		}
+		vistos[j.UID] = true
+		novo, err := notify.Send(j.UID, replaceID, n.Urgency, n.Headline, n.Body)
+		if err != nil {
+			logPrio(4, "horario: notificacao falhou: %v", err)
+			continue
+		}
+		id = novo
+	}
+	// Sem jogos (ex: o jogo fechou), avisamos quem tem sessao grafica: o dono
+	// do id anterior nao e conhecido, entao usamos o usuario do sudoers.
+	if len(jogos) == 0 {
+		if uid, ok := sessionUID(); ok {
+			if novo, err := notify.Send(uid, replaceID, n.Urgency, n.Headline, n.Body); err == nil {
+				id = novo
+			} else {
+				logPrio(4, "horario: notificacao falhou: %v", err)
+			}
+		}
+	}
+	return id
+}
+
+// sessionUID devolve o uid do unico usuario com sessao em /run/user (fora o
+// root). Com mais de um, nao chutamos.
+func sessionUID() (uint32, bool) {
+	entries, err := os.ReadDir("/run/user")
+	if err != nil {
+		return 0, false
+	}
+	var uids []uint64
+	for _, e := range entries {
+		if uid, err := strconv.ParseUint(e.Name(), 10, 32); err == nil && uid != 0 {
+			uids = append(uids, uid)
+		}
+	}
+	if len(uids) != 1 {
+		return 0, false
+	}
+	return uint32(uids[0]), true
+}
+
+func loadScheduleState() schedule.State {
+	var st schedule.State
+	if data, err := os.ReadFile(scheduleStatePath); err == nil {
+		if err := json.Unmarshal(data, &st); err != nil {
+			logPrio(4, "horario: estado corrompido, ignorando: %v", err)
+			return schedule.State{}
+		}
+	}
+	return st
+}
+
+func saveScheduleState(st schedule.State) {
+	data, _ := json.Marshal(st)
+	tmp := scheduleStatePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err == nil {
+		err = os.Rename(tmp, scheduleStatePath)
+		if err == nil {
+			return
+		}
+	}
+	logPrio(4, "horario: nao consegui gravar %s", scheduleStatePath)
 }
 
 func loadScheduleConfig(cmd *cobra.Command) (*schedule.Config, error) {

@@ -1,6 +1,7 @@
 package blocker
 
 import (
+	"os"
 	"os/exec"
 	"testing"
 )
@@ -94,4 +95,26 @@ func TestMatchesBlockedProcessReal(t *testing.T) {
 	if !matchesBlockedProcess(pid, []string{"sh"}) {
 		t.Error("o proprio shell deveria bater com 'sh' (comm/argv0)")
 	}
+}
+
+func TestFindProcessesReal(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("nao consegui iniciar sleep: %v", err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+
+	found, err := FindProcesses([]string{"sleep"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range found {
+		if p.PID == cmd.Process.Pid {
+			if p.UID != uint32(os.Getuid()) {
+				t.Errorf("UID = %d, queria %d", p.UID, os.Getuid())
+			}
+			return
+		}
+	}
+	t.Fatalf("sleep (pid %d) nao encontrado em %v", cmd.Process.Pid, found)
 }
