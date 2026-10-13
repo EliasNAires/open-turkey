@@ -89,19 +89,22 @@ exec sudo $(INSTALL_PATH)/$(BINARY_INSTALLED) "$$@"\n' > $(INSTALL_PATH)/$(BINAR
 
 	@echo ">> Configurando sudoers para execucao sem senha..."
 	# Regra sudoers: permite que SOMENTE o usuario que rodou o instalador
-	# ($SUDO_USER) execute open-turkey-bin como root, sem senha.
+	# ($SUDO_USER, ou o usuario de $PKEXEC_UID) execute open-turkey-bin como root, sem senha.
 	#   <usuario> ALL=(root) NOPASSWD: /usr/local/bin/open-turkey-bin
 	#
 	# O arquivo e gerado num temporario, validado com "visudo -cf" e so
 	# entao movido para o lugar — um sudoers invalido quebraria o sudo.
 	# chmod 440: obrigatorio, o sudo recusa arquivos com permissoes abertas.
-	@case "$$SUDO_USER" in \
-	  ""|root) echo "Erro: rode via 'sudo' a partir do seu usuario (SUDO_USER vazio ou root)."; exit 1;; \
+	# Com pkexec nao existe SUDO_USER, so PKEXEC_UID: usamos o nome desse uid.
+	@user="$$SUDO_USER"; \
+	if [ -z "$$user" ] && [ -n "$$PKEXEC_UID" ]; then user=$$(id -nu "$$PKEXEC_UID"); fi; \
+	case "$$user" in \
+	  ""|root) echo "Erro: rode via 'sudo' (ou pkexec) a partir do seu usuario."; exit 1;; \
 	esac; \
-	echo "$$SUDO_USER" | grep -Eq '^[a-z_][a-z0-9_-]*$$' || { echo "Erro: nome de usuario invalido: $$SUDO_USER"; exit 1; }; \
-	id -u "$$SUDO_USER" >/dev/null || exit 1; \
+	echo "$$user" | grep -Eq '^[a-z_][a-z0-9_-]*$$' || { echo "Erro: nome de usuario invalido: $$user"; exit 1; }; \
+	id -u "$$user" >/dev/null || exit 1; \
 	tmp=$$(mktemp); \
-	printf '%s ALL=(root) NOPASSWD: $(INSTALL_PATH)/$(BINARY_INSTALLED)\n' "$$SUDO_USER" > "$$tmp"; \
+	printf '%s ALL=(root) NOPASSWD: $(INSTALL_PATH)/$(BINARY_INSTALLED)\n' "$$user" > "$$tmp"; \
 	chmod 440 "$$tmp"; \
 	visudo -cf "$$tmp" || { rm -f "$$tmp"; echo "Erro: regra sudoers invalida"; exit 1; }; \
 	install -o root -g root -m 440 "$$tmp" $(SUDOERS_FILE); \
