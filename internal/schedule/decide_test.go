@@ -35,17 +35,17 @@ func TestDecideCarenciaCompleta(t *testing.T) {
 		t.Fatalf("12:30: %+v", d)
 	}
 	st := d.State
-	st.NotifyID = 42
 
 	// 12:40: ainda em carencia, faltam 5 min; mantem o id da notificacao.
 	d = cfg.Decide(at(t, cfg, "2026-10-12 12:40:00"), false, false, true, st)
-	if d.Activate || d.Notice == nil || d.Notice.Headline != "Steam will be blocked in 5 min" || d.State.NotifyID != 42 {
+	if d.Activate || d.Notice == nil || d.Notice.Headline != "Steam will be blocked in 5 min" {
 		t.Fatalf("12:40: %+v", d)
 	}
 
-	// 12:45: acabou o prazo, ativa mesmo com jogo.
+	// 12:45: acabou o prazo, ativa mesmo com jogo. Sem aviso proprio: o
+	// aviso de "Closed ..." vem de quem mata os processos.
 	d = cfg.Decide(at(t, cfg, "2026-10-12 12:45:00"), false, false, true, d.State)
-	if !d.Activate || d.Notice == nil || d.Notice.Headline != "Steam blocked" {
+	if !d.Activate || d.Notice != nil {
 		t.Fatalf("12:45: %+v", d)
 	}
 }

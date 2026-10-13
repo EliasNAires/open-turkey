@@ -223,3 +223,17 @@ func (c *Config) PeriodStart(t time.Time) time.Time {
 	}
 	return time.Time{}
 }
+
+// UnblockHint devolve "Unblocked again: Wed 11:30." se o horario instalado
+// estiver bloqueando agora, ou "" se nao houver horario/estado aplicavel.
+func UnblockHint(now time.Time) string {
+	cfg, err := Load(DefaultConfigPath)
+	if err != nil || !cfg.ShouldBlock(now) {
+		return ""
+	}
+	next, ok := cfg.NextChange(now)
+	if !ok {
+		return ""
+	}
+	return "Unblocked again: " + next.In(cfg.Location).Format("Mon 15:04") + "."
+}

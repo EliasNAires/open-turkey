@@ -23,6 +23,8 @@ import (
 
 	"github.com/brunodcdo/open-turkey/internal/blocker"
 	"github.com/brunodcdo/open-turkey/internal/db"
+	"github.com/brunodcdo/open-turkey/internal/notify"
+	"github.com/brunodcdo/open-turkey/internal/schedule"
 )
 
 // Run \u00e9 a fun\u00e7\u00e3o principal do daemon. Ela inicia o loop de fiscaliza\u00e7\u00e3o
@@ -166,12 +168,14 @@ func enforce(database *db.DB) error {
 	// Procuramos por processos de aplicativos bloqueados e os encerramos.
 	// Isso impede o uso de apps como jogos ou redes sociais no desktop.
 	if len(apps) > 0 {
-		killed, err := blocker.KillBlocked(apps)
+		killed, err := blocker.KillBlockedReport(apps)
 		if err != nil {
 			log.Printf("daemon: erro ao matar processos bloqueados: %v", err)
 		}
-		if killed > 0 {
-			log.Printf("daemon: %d processos bloqueados encerrados", killed)
+		if len(killed) > 0 {
+			log.Printf("daemon: %d processos bloqueados encerrados", len(killed))
+			// Avisa o usuario do que foi fechado (so quando algo foi fechado).
+			notify.ReportKills(killed, schedule.UnblockHint(time.Now()))
 		}
 	}
 

@@ -15,8 +15,6 @@ type State struct {
 	GraceFor time.Time `json:"grace_for"`
 	// GraceStart e quando a carencia atual comecou; zero = sem carencia.
 	GraceStart time.Time `json:"grace_start"`
-	// NotifyID e o id da notificacao, para atualiza-la no lugar.
-	NotifyID uint32 `json:"notify_id,omitempty"`
 }
 
 // Notice e uma notificacao a mostrar ao usuario.
@@ -53,7 +51,7 @@ func (c *Config) Decide(now time.Time, active, locked, gameRunning bool, st Stat
 
 	if c.Grace > 0 && gameRunning && (inGrace || graceAvailable) {
 		if !inGrace {
-			st = State{GraceFor: period, GraceStart: now, NotifyID: st.NotifyID}
+			st = State{GraceFor: period, GraceStart: now}
 		}
 		remaining := st.GraceStart.Add(c.Grace).Sub(now)
 		if remaining > 0 {
@@ -64,14 +62,12 @@ func (c *Config) Decide(now time.Time, active, locked, gameRunning bool, st Stat
 				Urgency:  "critical",
 			}}
 		}
-		return Decision{Activate: true, State: State{GraceFor: period, NotifyID: st.NotifyID}, Notice: &Notice{
-			Headline: fmt.Sprintf("%s blocked", displayName(c.Block)),
-			Body:     "Grace period is over: Steam and running games were closed.",
-			Urgency:  "normal",
-		}}
+		// Fim do prazo: ativa sem aviso proprio — o daemon avisa o que fechou
+		// ("Closed Steam and <jogo>"), substituindo o aviso de carencia.
+		return Decision{Activate: true, State: State{GraceFor: period}}
 	}
 
-	d := Decision{Activate: true, State: State{GraceFor: period, NotifyID: st.NotifyID}}
+	d := Decision{Activate: true, State: State{GraceFor: period}}
 	if inGrace {
 		// O jogo fechou antes do fim da carencia.
 		d.Notice = &Notice{Headline: fmt.Sprintf("%s blocked", displayName(c.Block)), Body: "Game closed: block is now active.", Urgency: "normal"}

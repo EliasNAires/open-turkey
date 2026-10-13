@@ -36,10 +36,13 @@ package cli
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/brunodcdo/open-turkey/internal/blocker"
 	"github.com/brunodcdo/open-turkey/internal/db"
 	"github.com/brunodcdo/open-turkey/internal/lock"
+	"github.com/brunodcdo/open-turkey/internal/notify"
+	"github.com/brunodcdo/open-turkey/internal/schedule"
 	"github.com/spf13/cobra"
 )
 
@@ -166,7 +169,7 @@ var startCmd = &cobra.Command{
 		// Camada 4: Matar processos — encerra apps bloqueados que estejam rodando.
 		// Usa SIGKILL (sinal 9) para garantir que o processo morra imediatamente.
 		if len(apps) > 0 {
-			blocker.KillBlocked(apps)
+			matarEAvisar(apps)
 		}
 
 		// --- Passo 7: Mensagem de sucesso ---
@@ -514,7 +517,7 @@ func reaplicarOuRemoverCamadas(database *db.DB) error {
 
 		// Matar processos dos blocos que ainda estão ativos.
 		if len(apps) > 0 {
-			blocker.KillBlocked(apps)
+			matarEAvisar(apps)
 		}
 	} else {
 		// Cenário 2: Nenhum bloco ativo — remover todas as camadas.
@@ -562,4 +565,13 @@ func init() {
 	rootCmd.AddCommand(stopCmd)
 	rootCmd.AddCommand(unlockCmd)
 	rootCmd.AddCommand(statusCmd)
+}
+
+// matarEAvisar mata os apps bloqueados (e descendentes) e, se fechou algo,
+// avisa o usuario com uma notificacao do Omarchy.
+func matarEAvisar(apps []string) {
+	killed, _ := blocker.KillBlockedReport(apps)
+	if len(killed) > 0 {
+		notify.ReportKills(killed, schedule.UnblockHint(time.Now()))
+	}
 }

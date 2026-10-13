@@ -121,7 +121,7 @@ func applySchedule(cfg *schedule.Config, agora time.Time) error {
 	d := cfg.Decide(agora, detalhe.Active, detalhe.Locked, len(jogos) > 0, st)
 
 	if d.Notice != nil {
-		d.State.NotifyID = notifyOwners(jogos, d.State.NotifyID, d.Notice)
+		notifyOwners(jogos, d.Notice)
 		logNotice("horario: %s — %s", d.Notice.Headline, d.Notice.Body)
 	}
 
@@ -158,35 +158,25 @@ func applySchedule(cfg *schedule.Config, agora time.Time) error {
 }
 
 // notifyOwners mostra a notificacao para os donos dos processos de jogo
-// (normalmente um so usuario). Erros nao impedem o bloqueio: so vao ao log.
-// Devolve o id da notificacao, para a proxima atualizacao ser no lugar.
-func notifyOwners(jogos []blocker.ProcessInfo, replaceID uint32, n *schedule.Notice) uint32 {
+// (normalmente um so usuario), ou, sem jogos (ex: o jogo fechou), para o unico
+// usuario com sessao. Erros nao impedem o bloqueio: so vao ao log.
+func notifyOwners(jogos []blocker.ProcessInfo, n *schedule.Notice) {
 	vistos := map[uint32]bool{}
-	id := replaceID
 	for _, j := range jogos {
-		if vistos[j.UID] || j.UID == 0 {
-			continue
+		if j.UID != 0 {
+			vistos[j.UID] = true
 		}
-		vistos[j.UID] = true
-		novo, err := notify.Send(j.UID, replaceID, n.Urgency, n.Headline, n.Body)
-		if err != nil {
-			logPrio(4, "horario: notificacao falhou: %v", err)
-			continue
-		}
-		id = novo
 	}
-	// Sem jogos (ex: o jogo fechou), avisamos quem tem sessao grafica: o dono
-	// do id anterior nao e conhecido, entao usamos o usuario do sudoers.
-	if len(jogos) == 0 {
+	if len(vistos) == 0 {
 		if uid, ok := sessionUID(); ok {
-			if novo, err := notify.Send(uid, replaceID, n.Urgency, n.Headline, n.Body); err == nil {
-				id = novo
-			} else {
-				logPrio(4, "horario: notificacao falhou: %v", err)
-			}
+			vistos[uid] = true
 		}
 	}
-	return id
+	for uid := range vistos {
+		if err := notify.Show(uid, n.Urgency, n.Headline, n.Body); err != nil {
+			logPrio(4, "horario: notificacao falhou: %v", err)
+		}
+	}
 }
 
 // sessionUID devolve o uid do unico usuario com sessao em /run/user (fora o

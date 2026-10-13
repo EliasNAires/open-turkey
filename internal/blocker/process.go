@@ -91,11 +91,30 @@ import (
 //	killed, err := blocker.KillBlocked([]string{"firefox", "chrome"})
 //	fmt.Printf("Processos encerrados: %d\n", killed)
 func KillBlocked(processNames []string) (int, error) {
+	killed, err := KillBlockedReport(processNames)
+	return len(killed), err
+}
+
+// KilledProcess descreve um processo encerrado por KillBlockedReport.
+type KilledProcess struct {
+	PID  int
+	UID  uint32
+	Comm string
+	// Args e o cmdline lido ANTES do kill (ex: "reaper SteamLaunch AppId=...").
+	Args []string
+	// Blocked e true se o proprio processo estava na lista (e nao so era
+	// descendente de um bloqueado).
+	Blocked bool
+}
+
+// KillBlockedReport faz o mesmo que KillBlocked, mas devolve quais processos
+// foram efetivamente encerrados — para avisar o usuario do que foi fechado.
+func KillBlockedReport(processNames []string) ([]KilledProcess, error) {
 	// Defesa extra: descartamos nomes invalidos ou criticos mesmo que ja
 	// estejam no banco (gravados antes de existir a validacao no add-app).
 	processNames = filtrarNomesSeguros(processNames)
 	if len(processNames) == 0 {
-		return 0, nil
+		return nil, nil
 	}
 
 	// Lemos o conteudo do diretorio /proc. Cada entrada pode ser:
@@ -103,7 +122,7 @@ func KillBlocked(processNames []string) (int, error) {
 	// - Um nome (ex: "cpuinfo", "meminfo") → e um arquivo do sistema, ignoramos
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	// PRIMEIRA PASSADA: montamos a arvore de processos (pid → pai, dono) e
@@ -129,7 +148,11 @@ func KillBlocked(processNames []string) (int, error) {
 
 	// SEGUNDA PASSADA: matamos os processos bloqueados e seus descendentes.
 	selfPID := os.Getpid()
-	killed := 0
+	blocked := map[int]bool{}
+	for _, pid := range matched {
+		blocked[pid] = true
+	}
+	var killed []KilledProcess
 	for _, pid := range withDescendants(matched, procs) {
 		// SEGURANCA: nunca o PID 1 (init/systemd) nem nos mesmos.
 		if pid == 1 || pid == selfPID {
@@ -137,8 +160,9 @@ func KillBlocked(processNames []string) (int, error) {
 		}
 		// SIGKILL: o processo nao pode capturar nem ignorar. Erros sao
 		// normais (o processo morreu entre a leitura e o kill).
+		info := describeProcess(pid, procs[pid].UID, blocked[pid])
 		if err := syscall.Kill(pid, syscall.SIGKILL); err == nil {
-			killed++
+			killed = append(killed, info)
 		}
 	}
 	return killed, nil
@@ -334,4 +358,17 @@ func FindProcesses(processNames []string) ([]ProcessInfo, error) {
 		}
 	}
 	return found, nil
+}
+
+// describeProcess le comm e cmdline de um processo (antes de mata-lo).
+func describeProcess(pid int, uid uint32, blocked bool) KilledProcess {
+	path := "/proc/" + strconv.Itoa(pid)
+	kp := KilledProcess{PID: pid, UID: uid, Blocked: blocked}
+	if b, err := os.ReadFile(path + "/comm"); err == nil {
+		kp.Comm = strings.TrimSpace(string(b))
+	}
+	if b, err := os.ReadFile(path + "/cmdline"); err == nil {
+		kp.Args = strings.Split(strings.TrimRight(string(b), "\x00"), "\x00")
+	}
+	return kp
 }
