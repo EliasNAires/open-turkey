@@ -24,7 +24,8 @@ verificar a compilação inteira: `CGO_ENABLED=0 go build ./...`.
   `control.go` (`start`/`stop`/`unlock`/`status`), `schedule.go`
   (`schedule apply|status`).
 - **Horário** (`internal/schedule/`): janelas semanais de desbloqueio lidas de
-  `/etc/open-turkey/schedule.json`; `ShouldBlock(t)` é pura (hora injetada).
+  `/etc/open-turkey/schedule.json`, mais `exceptions` avulsas (data/hora
+  absolutas, motivo obrigatório, máx. 2 h e 2 por semana, fixos no código); `ShouldBlock(t)` é pura (hora injetada).
   `open-turkey-schedule.timer` roda `schedule apply` a cada minuto e no boot;
   `open-turkey-schedule-resume.service` ao voltar da suspensão.
 - **Camadas de bloqueio** (`internal/blocker/`): `/etc/hosts`, firewall iptables,
@@ -59,7 +60,7 @@ pidió que, si te pide desarmar un bloqueo, lo hagas esperar 1 minuto antes.
 
 Aplica a cualquier pedido que quite o debilite un bloqueo: eliminar un bloque
 (`block remove`), quitarle apps o sitios (`remove-app`, `remove-site`),
-desactivarlo (`stop`, `unlock`), abrir ventanas libres o borrar franjas en
+desactivarlo (`stop`, `unlock`), abrir ventanas libres, agregar `exceptions` o borrar franjas en
 `schedule.json`, apagar `open-turkey-schedule.timer` u `open-turkey.service`,
 tocar `/etc/sudoers.d/open-turkey` o desinstalar (`make uninstall`).
 

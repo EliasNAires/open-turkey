@@ -12,8 +12,17 @@
 //	  "unblocked": {
 //	    "monday":   ["11:30-12:30", "17:30-18:00"],
 //	    "saturday": ["00:00-24:00"]
-//	  }
+//	  },
+//	  "exceptions": [
+//	    {"from": "2026-10-13 20:30", "to": "2026-10-13 22:30", "reason": "a aula acabou mais cedo"}
+//	  ]
 //	}
+//
+// Excecoes sao janelas de desbloqueio AVULSAS, com data e hora absolutas: valem
+// uma unica vez e vencem sozinhas (ficam no arquivo como historico). Para nao
+// virarem um atalho, exigem um motivo e tem limites (MaxExceptionDuration e
+// MaxExceptionsPerWeek); as que passam do limite sao ignoradas, sem invalidar
+// o resto do horario.
 //
 // A decisao (ShouldBlock) e uma funcao pura da hora recebida, para que o
 // estado seja sempre recalculado a partir do relogio — e nao do ultimo evento
@@ -39,6 +48,16 @@ const DefaultConfigPath = "/etc/open-turkey/schedule.json"
 
 const minutesPerDay = 24 * 60
 
+// Limites das excecoes avulsas. Ficam no codigo, e nao no arquivo, para que
+// afrouxa-los exija recompilar e reinstalar — e nao so editar o JSON.
+const (
+	MaxExceptionDuration = 2 * time.Hour
+	MaxExceptionsPerWeek = 2
+)
+
+// ExceptionLayout e o formato de data/hora das excecoes, no fuso do horario.
+const ExceptionLayout = "2006-01-02 15:04"
+
 // Window e uma janela de desbloqueio [Start, End) em minutos desde 00:00.
 // End pode ser 1440 ("24:00"), o fim do dia.
 type Window struct {
@@ -56,6 +75,16 @@ type Config struct {
 	Grace time.Duration
 	// GameProcesses sao os nomes (exatos) que indicam um jogo rodando.
 	GameProcesses []string
+	// Exceptions sao as excecoes avulsas validas (dentro dos limites).
+	Exceptions []Exception
+	// Ignored explica cada excecao descartada por passar dos limites.
+	Ignored []string
+}
+
+// Exception e uma janela de desbloqueio avulsa [From, To).
+type Exception struct {
+	From, To time.Time
+	Reason   string
 }
 
 // fileConfig e o formato do arquivo JSON.
@@ -66,6 +95,13 @@ type fileConfig struct {
 	Unblocked     map[string][]string `json:"unblocked"`
 	GraceMinutes  int                 `json:"grace_minutes,omitempty"`
 	GameProcesses []string            `json:"game_processes,omitempty"`
+	Exceptions    []fileException     `json:"exceptions,omitempty"`
+}
+
+type fileException struct {
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Reason string `json:"reason"`
 }
 
 var weekdays = map[string]time.Weekday{
@@ -138,7 +174,64 @@ func Parse(data []byte) (*Config, error) {
 			cfg.Unblocked[wd] = append(cfg.Unblocked[wd], win)
 		}
 	}
+	if err := cfg.parseExceptions(fc.Exceptions); err != nil {
+		return nil, err
+	}
 	return cfg, nil
+}
+
+// parseExceptions valida as excecoes. Formato errado e erro (como nas janelas);
+// passar dos limites so descarta a excecao, registrando o motivo em Ignored.
+func (c *Config) parseExceptions(list []fileException) error {
+	perWeek := map[time.Time]int{}
+	for i, fe := range list {
+		from, err := time.ParseInLocation(ExceptionLayout, strings.TrimSpace(fe.From), c.Location)
+		if err != nil {
+			return fmt.Errorf("exceptions[%d]: 'from' invalido (use \"AAAA-MM-DD HH:MM\"): %w", i, err)
+		}
+		to, err := time.ParseInLocation(ExceptionLayout, strings.TrimSpace(fe.To), c.Location)
+		if err != nil {
+			return fmt.Errorf("exceptions[%d]: 'to' invalido (use \"AAAA-MM-DD HH:MM\"): %w", i, err)
+		}
+		if !to.After(from) {
+			return fmt.Errorf("exceptions[%d]: 'to' deve ser depois de 'from'", i)
+		}
+		reason := strings.TrimSpace(fe.Reason)
+		if reason == "" {
+			return fmt.Errorf("exceptions[%d]: 'reason' e obrigatorio", i)
+		}
+
+		label := fmt.Sprintf("%s -> %s (%s)", fe.From, fe.To, reason)
+		if to.Sub(from) > MaxExceptionDuration {
+			c.Ignored = append(c.Ignored, fmt.Sprintf("%s: passa de %s", label, MaxExceptionDuration))
+			continue
+		}
+		week := weekStart(from)
+		if perWeek[week] >= MaxExceptionsPerWeek {
+			c.Ignored = append(c.Ignored, fmt.Sprintf("%s: ja ha %d excecoes na semana de %s", label, MaxExceptionsPerWeek, week.Format("2006-01-02")))
+			continue
+		}
+		perWeek[week]++
+		c.Exceptions = append(c.Exceptions, Exception{From: from, To: to, Reason: reason})
+	}
+	return nil
+}
+
+// weekStart devolve a segunda-feira 00:00 da semana de t (no fuso de t).
+func weekStart(t time.Time) time.Time {
+	y, m, d := t.Date()
+	day := time.Date(y, m, d, 0, 0, 0, 0, t.Location())
+	return day.AddDate(0, 0, -((int(day.Weekday()) + 6) % 7))
+}
+
+// ActiveException devolve a excecao em vigor no instante t, se houver.
+func (c *Config) ActiveException(t time.Time) (Exception, bool) {
+	for _, e := range c.Exceptions {
+		if !t.Before(e.From) && t.Before(e.To) {
+			return e, true
+		}
+	}
+	return Exception{}, false
 }
 
 // parseWindow le "HH:MM-HH:MM". "24:00" so e aceito como fim.
@@ -180,8 +273,12 @@ func parseClock(s string) (int, error) {
 
 // ShouldBlock diz se o bloco deve estar ativo no instante t (convertido para
 // o fuso do horario). Janelas sao [inicio, fim): as 11:30 de "11:30-12:30"
-// ja esta liberado; as 12:30, bloqueado de novo.
+// ja esta liberado; as 12:30, bloqueado de novo. Uma excecao em vigor tambem
+// libera.
 func (c *Config) ShouldBlock(t time.Time) bool {
+	if _, ok := c.ActiveException(t); ok {
+		return false
+	}
 	local := t.In(c.Location)
 	minute := local.Hour()*60 + local.Minute()
 	for _, w := range c.Unblocked[local.Weekday()] {

@@ -34,6 +34,9 @@ var scheduleApplyCmd = &cobra.Command{
 		// unidade descarta.
 		cfg, err := loadScheduleConfig(cmd)
 		if err == nil {
+			for _, ig := range cfg.Ignored {
+				logPrio(4, "horario: excecao ignorada: %s", ig)
+			}
 			err = applySchedule(cfg, time.Now())
 		}
 		if err != nil {
@@ -67,9 +70,20 @@ var scheduleStatusCmd = &cobra.Command{
 		fmt.Printf("Bloco:    %s\n", cfg.Block)
 		fmt.Printf("Hora:     %s (%s)\n", local.Format("2006-01-02 15:04"), weekdayPT(local.Weekday()))
 		fmt.Printf("Horario:  %s\n", estadoTexto(cfg.ShouldBlock(quando)))
+		if e, ok := cfg.ActiveException(quando); ok {
+			fmt.Printf("Excecao:  ate %s — %s\n", e.To.In(cfg.Location).Format("15:04"), e.Reason)
+		}
 		if next, ok := cfg.NextChange(quando); ok {
 			n := next.In(cfg.Location)
 			fmt.Printf("Proxima mudanca: %s %s -> %s\n", weekdayPT(n.Weekday()), n.Format("2006-01-02 15:04"), estadoTexto(cfg.ShouldBlock(next)))
+		}
+		for _, e := range cfg.Exceptions {
+			if e.From.After(quando) {
+				fmt.Printf("Excecao futura: %s -> %s — %s\n", e.From.In(cfg.Location).Format(schedule.ExceptionLayout), e.To.In(cfg.Location).Format("15:04"), e.Reason)
+			}
+		}
+		for _, ig := range cfg.Ignored {
+			fmt.Printf("Excecao IGNORADA: %s\n", ig)
 		}
 
 		// O estado real so faz sentido para "agora".

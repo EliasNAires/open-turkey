@@ -142,3 +142,57 @@ func unwrap(err error) error {
 		err = u.Unwrap()
 	}
 }
+
+func TestExcecoes(t *testing.T) {
+	cfg, err := Parse([]byte(`{"block":"x","timezone":"America/Argentina/Buenos_Aires","unblocked":{},
+	  "exceptions":[
+	    {"from":"2026-10-13 20:30","to":"2026-10-13 22:30","reason":"aula acabou cedo"},
+	    {"from":"2026-10-14 10:00","to":"2026-10-14 13:00","reason":"longa demais"},
+	    {"from":"2026-10-15 10:00","to":"2026-10-15 11:00","reason":"segunda da semana"},
+	    {"from":"2026-10-16 10:00","to":"2026-10-16 11:00","reason":"terceira da semana"},
+	    {"from":"2026-10-19 10:00","to":"2026-10-19 11:00","reason":"semana seguinte"}
+	  ]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Exceptions) != 3 || len(cfg.Ignored) != 2 {
+		t.Fatalf("validas=%d ignoradas=%d (%v), queria 3 e 2", len(cfg.Exceptions), len(cfg.Ignored), cfg.Ignored)
+	}
+	casos := []struct {
+		quando    string
+		bloqueado bool
+	}{
+		{"2026-10-13 20:29:59", true},
+		{"2026-10-13 20:30:00", false},
+		{"2026-10-13 22:29:59", false},
+		{"2026-10-13 22:30:00", true}, // vence sozinha
+		{"2026-10-20 20:30:00", true}, // nao se repete na terca seguinte
+		{"2026-10-14 11:00:00", true}, // ignorada: mais de 2h
+		{"2026-10-15 10:30:00", false},
+		{"2026-10-16 10:30:00", true}, // ignorada: terceira da semana
+		{"2026-10-19 10:30:00", false},
+	}
+	for _, c := range casos {
+		if got := cfg.ShouldBlock(at(t, cfg, c.quando)); got != c.bloqueado {
+			t.Errorf("%s: bloqueado=%v, queria %v", c.quando, got, c.bloqueado)
+		}
+	}
+	if next, ok := cfg.NextChange(at(t, cfg, "2026-10-13 21:00:00")); !ok || !next.Equal(at(t, cfg, "2026-10-13 22:30:00")) {
+		t.Errorf("NextChange durante a excecao = %v, queria 22:30", next)
+	}
+}
+
+func TestExcecoesRejeita(t *testing.T) {
+	invalidos := map[string]string{
+		"sem motivo":   `{"from":"2026-10-13 20:00","to":"2026-10-13 21:00","reason":" "}`,
+		"fim antes":    `{"from":"2026-10-13 21:00","to":"2026-10-13 20:00","reason":"x"}`,
+		"data ruim":    `{"from":"13/10 20:00","to":"2026-10-13 21:00","reason":"x"}`,
+		"campo errado": `{"from":"2026-10-13 20:00","until":"2026-10-13 21:00","reason":"x"}`,
+	}
+	for nome, ex := range invalidos {
+		js := `{"block":"x","timezone":"UTC","unblocked":{},"exceptions":[` + ex + `]}`
+		if _, err := Parse([]byte(js)); err == nil {
+			t.Errorf("%s: Parse deveria falhar", nome)
+		}
+	}
+}

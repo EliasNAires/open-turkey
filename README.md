@@ -131,6 +131,35 @@ Remove an entire block (must be inactive):
 open-turkey block remove social-media
 ```
 
+### 4) Weekly schedule and one-off exceptions
+
+`/etc/open-turkey/schedule.json` lists the windows in which a block is
+**unblocked**; outside them it is blocked. `open-turkey-schedule.timer`
+applies it every minute. Check it with:
+
+```bash
+open-turkey-schedule status
+open-turkey-schedule status --at "2026-10-14 11:30"
+```
+
+For a one-time window (e.g. a class ended early), add an exception with
+absolute dates instead of editing the weekly windows:
+
+```json
+"exceptions": [
+  {"from": "2026-10-13 20:30", "to": "2026-10-13 22:30", "reason": "class ended early"}
+]
+```
+
+- Exceptions apply once and expire on their own; past ones stay in the file as a log.
+- `reason` is required.
+- At most **2 h** each and **2 per week** (Monday to Sunday). These limits live in the code, not the file. An exception over a limit is ignored (`status` shows it as `IGNORADA`), and the rest of the schedule still applies.
+- A block locked with `--lock` is never unblocked by the schedule or an exception.
+
+If the windows are designed elsewhere (a calendar, a planning page), copy
+them into `schedule.json` by hand. Do not wire that source to the blocker:
+an outage there must not open or close the block.
+
 ## Service (daemon) and logs
 
 The daemon is managed by `systemd`:
