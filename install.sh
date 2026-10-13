@@ -25,9 +25,13 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# --- Compila o binario ---
-echo "==> Etapa 1/2: Compilando o Open Turkey..."
-make build
+# --- Verifica o binario ja compilado ---
+# Nao compilamos como root: o Go pode estar so no PATH do usuario (mise).
+echo "==> Etapa 1/2: Verificando o binario compilado..."
+if [ ! -x ./open-turkey ]; then
+    echo "Erro: binario nao encontrado. Rode 'make build' (sem sudo) antes."
+    exit 1
+fi
 
 # --- Instala o binario, servico e configura o systemd ---
 echo "==> Etapa 2/2: Instalando o Open Turkey..."

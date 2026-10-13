@@ -47,8 +47,14 @@ build:
 #   open-turkey start ...
 # sem precisar digitar "sudo" nem senha.
 # -------------------------------------------------------
+#
+# O install NAO compila: o Go pode estar instalado so para o usuario
+# (ex: via mise), fora do PATH do root. Rode "make build" como usuario
+# antes de "sudo ./install.sh".
+# -------------------------------------------------------
 .PHONY: install
-install: build
+install:
+	@test -x $(BINARY_NAME) || { echo "Erro: binario '$(BINARY_NAME)' nao encontrado. Rode 'make build' (sem sudo) antes."; exit 1; }
 	@echo ">> Instalando o binario real como $(BINARY_INSTALLED)..."
 	# O binario real fica com outro nome para que o wrapper
 	# script possa ocupar o nome "open-turkey"
@@ -75,19 +81,24 @@ exec sudo $(INSTALL_PATH)/$(BINARY_INSTALLED) "$$@"\n' > $(INSTALL_PATH)/$(BINAR
 	chmod 755 $(INSTALL_PATH)/$(BINARY_NAME)
 
 	@echo ">> Configurando sudoers para execucao sem senha..."
-	# Regra sudoers: permite que QUALQUER usuario execute open-turkey-bin
-	# como root, sem precisar digitar senha.
-	#   ALL ALL=(root) NOPASSWD: /usr/local/bin/open-turkey-bin
-	#    |   |    |       |
-	#    |   |    |       +-- nao pede senha
-	#    |   |    +---------- executa como root
-	#    |   +--------------- qualquer usuario
-	#    +------------------- em qualquer host
+	# Regra sudoers: permite que SOMENTE o usuario que rodou o instalador
+	# ($SUDO_USER) execute open-turkey-bin como root, sem senha.
+	#   <usuario> ALL=(root) NOPASSWD: /usr/local/bin/open-turkey-bin
 	#
-	# chmod 440: somente root e o grupo root podem ler o arquivo.
-	# Isso e obrigatorio — o sudo recusa arquivos com permissoes abertas.
-	printf 'ALL ALL=(root) NOPASSWD: $(INSTALL_PATH)/$(BINARY_INSTALLED)\n' > $(SUDOERS_FILE)
-	chmod 440 $(SUDOERS_FILE)
+	# O arquivo e gerado num temporario, validado com "visudo -cf" e so
+	# entao movido para o lugar — um sudoers invalido quebraria o sudo.
+	# chmod 440: obrigatorio, o sudo recusa arquivos com permissoes abertas.
+	@case "$$SUDO_USER" in \
+	  ""|root) echo "Erro: rode via 'sudo' a partir do seu usuario (SUDO_USER vazio ou root)."; exit 1;; \
+	esac; \
+	echo "$$SUDO_USER" | grep -Eq '^[a-z_][a-z0-9_-]*$$' || { echo "Erro: nome de usuario invalido: $$SUDO_USER"; exit 1; }; \
+	id -u "$$SUDO_USER" >/dev/null || exit 1; \
+	tmp=$$(mktemp); \
+	printf '%s ALL=(root) NOPASSWD: $(INSTALL_PATH)/$(BINARY_INSTALLED)\n' "$$SUDO_USER" > "$$tmp"; \
+	chmod 440 "$$tmp"; \
+	visudo -cf "$$tmp" || { rm -f "$$tmp"; echo "Erro: regra sudoers invalida"; exit 1; }; \
+	install -o root -g root -m 440 "$$tmp" $(SUDOERS_FILE); \
+	rm -f "$$tmp"
 
 	@echo ">> Instalando o servico do systemd..."
 	cp systemd/open-turkey.service $(SERVICE_PATH)/open-turkey.service
